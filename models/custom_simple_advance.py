@@ -24,7 +24,7 @@ class YourConvNet(nn.Module):
         :return: the TOTAL downsample ratio of the ConvNet.
         E.g., for a ResNet-50, this should return 32.
         """
-        raise NotImplementedError
+        return 32
     
     def get_feature_map_channels(self) -> List[int]:
         """
@@ -33,7 +33,7 @@ class YourConvNet(nn.Module):
         :return: a list of the number of channels of each feature map.
         E.g., for a ResNet-50, this should return [256, 512, 1024, 2048].
         """
-        raise NotImplementedError
+        return [256, 512, 1024, 2048]
     
     def forward(self, inp_bchw: torch.Tensor, hierarchical=False):
         """
@@ -51,15 +51,14 @@ class YourConvNet(nn.Module):
 
 
 @register_model
-def your_convnet_small(pretrained=False, **kwargs):
-    raise NotImplementedError
+def baseLine(pretrained=False, **kwargs):
     return YourConvNet(**kwargs)
 
 
 @torch.no_grad()
 def convnet_test():
     from timm.models import create_model
-    cnn = create_model('your_convnet_small')
+    cnn = create_model('baseLine')
     print('get_downsample_ratio:', cnn.get_downsample_ratio())
     print('get_feature_map_channels:', cnn.get_feature_map_channels())
     

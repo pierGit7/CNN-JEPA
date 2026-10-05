@@ -29,7 +29,6 @@ from pretrain.online_classification_benchmark import OnlineLinearClassificationB
 import utils
 
 from data.imagenette import Imagenette
-from data.cached_imagenet import CachedImageNet
 from data.hdf5_imagefolder import HDF5ImageFolder
 
 class LightlyModel(pl.LightningModule):
@@ -182,21 +181,23 @@ class LightlyModel(pl.LightningModule):
             "imagenet-100": HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
             "imagenet-1k":  HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
         }
+        data_root = self.cfg.data.get("root", "/data")
+        imagenette_size = self.cfg.data.get("imagenette_size", "full")  # "full" | "320px" | "160px"
         train_dataset_kwargs = {
-            "cifar10": dict(root="/data/cifar10", download=True),
-            "stl10": dict(root="/data/stl10", download=True, split='train+unlabeled'),
-            "tiny-imagenet": dict(root="/data/tiny-imagenet-200/train"),
-            "imagenette": dict(root="/data/imagenette", split='train', download=True),
-            "imagenet-100": dict(root="/data/imagenet-100-train.h5"),
-            "imagenet-1k": dict(root="/data/imagenet-train.h5"),
+            "cifar10": dict(root=f"{data_root}/cifar10", download=True),
+            "stl10": dict(root=f"{data_root}/stl10", download=True, split='train+unlabeled'),
+            "tiny-imagenet": dict(root=f"{data_root}/tiny-imagenet-200/train"),
+            "imagenette": dict(root=f"{data_root}/imagenette", split='train', size=imagenette_size, download=True),
+            "imagenet-100": dict(root=f"{data_root}/imagenet-100-train.h5"),
+            "imagenet-1k": dict(root=f"{data_root}/imagenet-train.h5"),
         }
         val_dataset_kwargs = {
-            "cifar10": dict(root="/data/cifar10", train=False),
-            "stl10": dict(root="/data/stl10", split='test'),
-            "tiny-imagenet": dict(root="/data/tiny-imagenet-200/val"),
-            "imagenette": dict(root="/data/imagenette", split='val'),
-            "imagenet-100": dict(root="/data/imagenet-100-val.h5"),
-            "imagenet-1k": dict(root="/data/imagenet-val.h5"),
+            "cifar10": dict(root=f"{data_root}/cifar10", train=False),
+            "stl10": dict(root=f"{data_root}/stl10", split='test'),
+            "tiny-imagenet": dict(root=f"{data_root}/tiny-imagenet-200/val"),
+            "imagenette": dict(root=f"{data_root}/imagenette", split='val', size=imagenette_size),
+            "imagenet-100": dict(root=f"{data_root}/imagenet-100-val.h5"),
+            "imagenet-1k": dict(root=f"{data_root}/imagenet-val.h5"),
         }
         input_sizes = {
             "cifar10": 32,
@@ -218,6 +219,7 @@ class LightlyModel(pl.LightningModule):
         self.train_dataset_kwargs = train_dataset_kwargs[self.cfg.data.dataset_name]
         self.val_dataset_kwargs = val_dataset_kwargs[self.cfg.data.dataset_name]
         self.input_size = input_sizes[self.cfg.data.dataset_name]
+        self.input_size = self.cfg.data.get("input_size", self.input_size)
         self.num_classes = num_classes[self.cfg.data.dataset_name]
 
         # Setup self.transform
@@ -247,13 +249,24 @@ class LightlyModel(pl.LightningModule):
             dist_rank=self.trainer.global_rank if self._trainer is not None else 0,
         ) # WARNING: At this point device is CPU!!!
 
+    def _dataloader_worker_kwargs(self):
+        num_workers = self.cfg.data.num_workers
+        kwargs = dict(num_workers=num_workers)
+        if num_workers > 0:
+            # keep workers alive across epochs instead of re-forking them every epoch
+            kwargs.update(
+                persistent_workers=True,
+                prefetch_factor=self.cfg.data.get("prefetch_factor", 2),
+            )
+        return kwargs
+
     def train_dataloader(self):
         dataloader = torch.utils.data.DataLoader(
             self.train_dataset,
             batch_size=self.cfg.optimizer.batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=self.cfg.data.num_workers,
+            **self._dataloader_worker_kwargs(),
         )
         return dataloader
 
@@ -263,7 +276,7 @@ class LightlyModel(pl.LightningModule):
             batch_size=self.cfg.optimizer.batch_size,
             shuffle=False,
             drop_last=False,
-            num_workers=self.cfg.data.num_workers,
+            **self._dataloader_worker_kwargs(),
         )
         return dataloader
 
@@ -337,7 +350,8 @@ def main_pretrain(cfg: DictConfig, lightly_model: LightlyModel):
     if world_size is not None:
         world_size = int(world_size)
     print("World size:", world_size, flush=True)
-    if world_size == 1:
+    if world_size is None or world_size == 1:
+        # not launched via SLURM (e.g. local Mac/MPS): single process, no DDP
         strategy = None
     else:
         strategy = pl.strategies.DDPStrategy(find_unused_parameters=False)

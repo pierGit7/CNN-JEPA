@@ -46,7 +46,7 @@ class OnlineLinearClassificationBenckmark:
         # Dataset & Dataloader setup
         self.transform = transforms.Compose(
             [
-                transforms.Resize(256),
+                transforms.Resize(int(input_size * 256 / 224)),
                 transforms.CenterCrop(input_size),
                 transforms.ToTensor(),
                 transforms.Normalize(
@@ -95,6 +95,14 @@ class OnlineLinearClassificationBenckmark:
             train_targets = [t.flatten(0,1) for t in train_targets]
             val_features = [f.flatten(0,1) for f in val_features]
             val_targets = [t.flatten(0,1) for t in val_targets]
+
+        if torch.device(device).type == "mps":
+            # F.cross_entropy crashes the process on MPS (torch 1.13); features are small, fit the classifiers on CPU
+            device = "cpu"
+            train_features = [f.cpu() for f in train_features]
+            train_targets = [t.cpu() for t in train_targets]
+            val_features = [f.cpu() for f in val_features]
+            val_targets = [t.cpu() for t in val_targets]
 
         if self.dist_rank == 0:
             # Initialize the linear classifier

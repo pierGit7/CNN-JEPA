@@ -78,6 +78,8 @@ def contrastive_acc_eval(backbone: nn.Module, dataset, batch_size: int = 64, inp
 
 
 def log_example_inputs(views, log_label="train", num_examples=8):
+    if wandb.run is None:
+        return
     batch_size = views[0].shape[0]
     num_examples = min(num_examples, batch_size)
     selected_views = [view[:num_examples].cpu().numpy() for view in views]
@@ -88,16 +90,15 @@ def log_example_inputs(views, log_label="train", num_examples=8):
     ]
     imgs = np.concatenate(selected_views, axis=-1).transpose(0, 2, 3, 1)
     wandb_imgs = [wandb.Image(imgs[i]) for i in range(num_examples)]
-    if wandb.run is not None:
-        wandb.log({f"examples/{log_label}": wandb_imgs})
-        # log x0 min and max, mean
-        wandb.log(
-            {
-                f"examples/{log_label}_x0_min": views[0].min(),
-                f"examples/{log_label}_x0_max": views[0].max(),
-                f"examples/{log_label}_x0_mean": views[0].mean(),
-            }
-        )
+    wandb.log({f"examples/{log_label}": wandb_imgs})
+    # log x0 min and max, mean
+    wandb.log(
+        {
+            f"examples/{log_label}_x0_min": views[0].min(),
+            f"examples/{log_label}_x0_max": views[0].max(),
+            f"examples/{log_label}_x0_mean": views[0].mean(),
+        }
+    )
 
 @torch.no_grad()
 def eval_feature_descriptors(backbone: nn.Module, dataset, batch_size: int = 64, input_size: int = 224, cfg_name=None, current_epoch=None):

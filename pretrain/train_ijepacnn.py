@@ -39,6 +39,7 @@ from pretrain.ijepa_mask import MultiBlockMask
 # import models.X does more than just importing the `models` module!
 # It also replaces some convnext models in the `timm` model registry with a ConvNext implementation that supports sparsity.
 import models.convnext
+import models.custom_simple  # registers `base_conv` in the timm model registry
 
 class IJEPA_CNN(LightlyModelMomentum):
     def __init__(self, cfg: DictConfig):
@@ -59,6 +60,8 @@ class IJEPA_CNN(LightlyModelMomentum):
             norm_cls = nn.BatchNorm2d
         elif self.cfg.backbone.name.lower().startswith('convnext'):
             norm_cls = LayerNorm2d
+        else:
+            norm_cls = nn.BatchNorm2d
 
         if self.cfg.use_projection_head:
             proj_layers = []
@@ -158,8 +161,9 @@ class IJEPA_CNN(LightlyModelMomentum):
         if strategy == "random":
             h, w = self.fmap_h, self.fmap_w
             idx = torch.rand(B, h * w, generator=generator).argsort(dim=1)
-            idx = idx[:, :self.len_keep].to(device)  # (B, len_keep)
-            context_mask = torch.zeros(B, h * w, dtype=torch.bool, device=device).scatter_(dim=1, index=idx, value=True).view(B, 1, h, w)
+            idx = idx[:, :self.len_keep]  # (B, len_keep)
+            # build on CPU, then move: bool scatter_ silently returns all-False on MPS (torch 1.13)
+            context_mask = torch.zeros(B, h * w, dtype=torch.bool).scatter_(dim=1, index=idx, value=True).view(B, 1, h, w).to(device)
             target_mask = context_mask.logical_not()
             return context_mask, target_mask   
         elif strategy == "multi-block":
