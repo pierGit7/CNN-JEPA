@@ -186,3 +186,9 @@ feature_tsv/*
 SparK/artifacts/*
 SparK/wandb/*
 byol_lightly.ckpt
+
+# Local conda env
+JEPA/
+
+# Local datasets
+datasets/

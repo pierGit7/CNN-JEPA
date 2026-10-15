@@ -26,6 +26,8 @@ predictor:
   kernel_size: 3
   dw_sep_conv: True
 use_projection_head: False
+
+# Dataset name
 data:
   dataset_name: "imagenet-100"
   num_workers: 12

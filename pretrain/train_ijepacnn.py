@@ -39,6 +39,8 @@ from pretrain.ijepa_mask import MultiBlockMask
 # import models.X does more than just importing the `models` module!
 # It also replaces some convnext models in the `timm` model registry with a ConvNext implementation that supports sparsity.
 import models.convnext
+import models.custom  # registers `simple_cnn` in the timm model registry
+import models.simple_convnext  # registers `convnext_simple` in the timm model registry
 
 class IJEPA_CNN(LightlyModelMomentum):
     def __init__(self, cfg: DictConfig):
@@ -59,6 +61,8 @@ class IJEPA_CNN(LightlyModelMomentum):
             norm_cls = nn.BatchNorm2d
         elif self.cfg.backbone.name.lower().startswith('convnext'):
             norm_cls = LayerNorm2d
+        else:
+            norm_cls = nn.BatchNorm2d  # any other backbone, e.g. simple_cnn
 
         if self.cfg.use_projection_head:
             proj_layers = []

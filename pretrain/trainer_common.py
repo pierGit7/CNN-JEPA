@@ -29,7 +29,6 @@ from pretrain.online_classification_benchmark import OnlineLinearClassificationB
 import utils
 
 from data.imagenette import Imagenette
-from data.cached_imagenet import CachedImageNet
 from data.hdf5_imagefolder import HDF5ImageFolder
 
 class LightlyModel(pl.LightningModule):
@@ -182,11 +181,13 @@ class LightlyModel(pl.LightningModule):
             "imagenet-100": HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
             "imagenet-1k":  HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
         }
+        imagenette_root = self.cfg.data.get("root", "/data") + "/imagenette"
+        imagenette_size = self.cfg.data.get("imagenette_size", "full")  # "full" | "320px" | "160px"
         train_dataset_kwargs = {
             "cifar10": dict(root="/data/cifar10", download=True),
             "stl10": dict(root="/data/stl10", download=True, split='train+unlabeled'),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/train"),
-            "imagenette": dict(root="/data/imagenette", split='train', download=True),
+            "imagenette": dict(root=imagenette_root, split='train', size=imagenette_size, download=True),
             "imagenet-100": dict(root="/data/imagenet-100-train.h5"),
             "imagenet-1k": dict(root="/data/imagenet-train.h5"),
         }
@@ -194,7 +195,7 @@ class LightlyModel(pl.LightningModule):
             "cifar10": dict(root="/data/cifar10", train=False),
             "stl10": dict(root="/data/stl10", split='test'),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/val"),
-            "imagenette": dict(root="/data/imagenette", split='val'),
+            "imagenette": dict(root=imagenette_root, split='val', size=imagenette_size),
             "imagenet-100": dict(root="/data/imagenet-100-val.h5"),
             "imagenet-1k": dict(root="/data/imagenet-val.h5"),
         }
