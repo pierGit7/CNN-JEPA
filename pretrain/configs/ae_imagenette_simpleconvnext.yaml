@@ -1,0 +1,77 @@
+# SparK-style masked autoencoder pretraining (baseline for CNN-JEPA) of a small 3-stage ConvNeXt (convnext_simple) on Imagenette, on one GPU (e.g. a university HPC node).
+# Identical to ae_imagenette_simplecnn.yaml except for the backbone section.
+# Run from the repo root:
+#   PYTHONPATH=. python pretrain/train_autoencoder.py --config-name ae_imagenette_simpleconvnext.yaml
+# Any value can be overridden on the command line, e.g.
+#   ... data.root=/path/to/datasets trainer.max_epochs=2 trainer.precision=16
+# Variants:
+#   ... mask.strategy=mixed    same masks as CNN-JEPA (multi-block + random) instead of SparK's random masks
+#   ... mask_ratio=0           plain autoencoder (no masking, decoder sees only the last feature map)
+# Data, backbone, optimizer and trainer settings match ijepacnn_imagenette_simpleconvnext.yaml for a fair comparison.
+
+seed: 42
+
+name: "AE_{data_dataset_name}_{backbone_name}_mask{mask_ratio}_lr{optimizer_lr}_bs{optimizer_batch_size}"
+artifacts_root: "artifacts/pretrain_lightly/autoencoder"   # "_<dataset_name>" is appended automatically
+
+# ---------------------------------------------------------------- input
+data:
+  dataset_name: "imagenette"  # image size (224) and class count come from trainer_common.py
+  root: "./datasets"          # images are read from <root>/imagenette/imagenette2-160/{train,val}; on the HPC pass data.root=/your/path
+  imagenette_size: "160px"    # which Imagenette download you have: "160px" | "320px" | "full"
+  num_workers: 8              # parallel image-loading processes (match the CPUs you request from SLURM)
+
+# ---------------------------------------------------------------- encoder
+backbone:
+  name: "convnext_simple"     # registered in models/simple_convnext.py
+  pretrained_weights: null
+  kwargs:
+    global_pool: ''           # keep the feature map (B, C, h, w); the decoder upsamples it back to the image
+    dims: [32, 64, 128]       # channels per stage (same as simple_cnn); 3 stages -> 224px input gives a 28x28 grid
+    depths: [1, 1, 1]         # ConvNeXt blocks per stage
+    kernel_size: 7            # depthwise conv kernel inside each block
+
+# ---------------------------------------------------------------- masking (only used when mask_ratio > 0)
+mask:
+  strategy: "random"          # SparK: random. multi-block | random | mixed (mixed = CNN-JEPA's masks)
+  mutli_block_kwargs:         # (sic: the code expects this spelling)
+    aspect_ratio: [0.75, 1.5]
+    enc_mask_scale: [1.0, 1.0]
+    min_keep: 5
+    num_enc_blocks: 1
+    num_pred_blocks: 4
+    pred_mask_scale: [0.15, 0.2]
+  mixed_mutli_block_ratio: 0.75   # share of batches using multi-block masks (the rest use random masks)
+mask_ratio: 0.6               # fraction of grid cells hidden by the random mask (SparK and CNN-JEPA: 0.6); 0 = plain autoencoder
+
+decoder:
+  width: null                 # channels of the first decoder block, halved at each upsampling (null = encoder's last channels)
+  norm_pix_loss: True         # SparK/MAE: normalize each 8x8 target patch to mean 0, std 1
+
+# ---------------------------------------------------------------- optimisation
+optimizer:
+  batch_size: 128            # same as the paper
+  lr: 0.01
+  weight_decay: 0.01
+  cosine_warmpup_sched: True  # (sic) linear warmup then cosine decay
+  lr_warmup_epochs: 10
+  exclude_norm_and_bias_from_wd: False
+  wd_schedule: False
+
+trainer:
+  max_epochs: 100
+  devices: 1
+  accelerator: "gpu"
+  precision: "bf16"           # needs an Ampere+ GPU (A100, A40, RTX 30xx/40xx...). On V100/older use 16; on a Mac use 32 with accelerator: "auto"
+  accumulate_grad_batches: null
+  overfit_batches: 0.0
+
+# ---------------------------------------------------------------- logging
+wandb_group: "autoencoder"
+wandb: true                   # set to false to disable W&B logging (metrics are then only printed)
+
+# disable hydra outputs
+hydra:
+  output_subdir: null
+  run:
+    dir: .
