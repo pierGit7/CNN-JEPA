@@ -83,6 +83,12 @@ keeps one frame every N of each video, because consecutive frames are near-dupli
 The configs `pretrain/configs/core50_{ijepacnn,ae,supervised}_imagenette_{simplecnn,simpleconvnext}.yaml` pretrain on
 Imagenette and evaluate on CORe50. `./run_core50.sh [hydra overrides]` runs all 6 of them.
 
+The class-split protocol (`data.class_split`) also works on CORe50. A split seed picks 5 of the 10 categories at random.
+The encoder is pretrained on those 5 seen categories (train sessions only). The online benchmark is then run on the 5
+unseen categories (`val_metrics/lin_top1`, ...) and, for reference, on the seen ones (`val_metrics/seen_lin_top1`, ...).
+The configs are `pretrain/configs/split5_{ijepacnn,ae,supervised}_core50_{simplecnn,simpleconvnext}.yaml`. To run them:
+`DATASET=core50 SEEDS="0 1 2" ./run_class_split.sh [hydra overrides]`, or the LSF job array `hpc_class_split_core50.sh`.
+
 
 ## Copyright, acknowledgements
 Our implementation is based on:

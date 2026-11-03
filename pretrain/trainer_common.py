@@ -321,13 +321,16 @@ class LightlyModel(pl.LightningModule):
     def make_class_split(self, seed, num_seen):
         """Randomly split the dataset's classes into num_seen seen classes and the remaining unseen classes.
         The split only depends on seed (not on cfg.seed), and is stored in cfg for logging."""
-        if self.cfg.data.dataset_name != "imagenette":
-            raise NotImplementedError("data.class_split is only implemented for imagenette")
+        if self.cfg.data.dataset_name == "imagenette":
+            wnids = sorted(Imagenette._WNID_TO_CLASS)  # class index = position in the sorted wnids
+            describe = lambda classes: [f"{c}:{wnids[c]}:{Imagenette._WNID_TO_CLASS[wnids[c]][0]}" for c in classes]
+        elif self.cfg.data.dataset_name == "core50":
+            describe = lambda classes: [f"{c}:{CORe50._CATEGORIES[c]}" for c in classes]  # the 10 object categories
+        else:
+            raise NotImplementedError("data.class_split is only implemented for imagenette and core50")
         perm = torch.randperm(self.num_classes, generator=torch.Generator().manual_seed(seed)).tolist()
         seen_classes, unseen_classes = sorted(perm[:num_seen]), sorted(perm[num_seen:])
 
-        wnids = sorted(Imagenette._WNID_TO_CLASS)  # class index = position in the sorted wnids
-        describe = lambda classes: [f"{c}:{wnids[c]}:{Imagenette._WNID_TO_CLASS[wnids[c]][0]}" for c in classes]
         print("Class split seed", seed, "| seen:", describe(seen_classes), "| unseen:", describe(unseen_classes), flush=True)
         OmegaConf.set_struct(self.cfg, False)
         self.cfg.data.class_split.seen_classes = describe(seen_classes)

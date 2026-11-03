@@ -1,0 +1,19 @@
+# Class-split protocol on CORe50: Autoencoder, pretrained on 5 randomly chosen CORe50 categories ("seen", train sessions
+# only), evaluated with the online linear / kNN benchmark on the other 5 categories ("unseen"), which the encoder never
+# saw during pretraining. Probes are fit on the train sessions and scored on the test sessions (3, 7, 10).
+#   val_metrics/lin_top1, knn_top1, ...   probe on the unseen categories: main metric
+#   val_metrics/seen_lin_top1, ...        same probe on the seen categories, for reference
+# Everything else (method, encoder, optimiser, class_split) is inherited from split5_ae_imagenette_simpleconvnext.yaml.
+# Run from the repo root:
+#   PYTHONPATH=. python pretrain/train_autoencoder.py --config-name split5_ae_core50_simpleconvnext.yaml
+# Other splits (folds): ... data.class_split.seed=1   (all 6 split5_*_core50_* configs: DATASET=core50 ./run_class_split.sh)
+
+defaults:
+  - split5_ae_imagenette_simpleconvnext
+  - _self_
+
+data:
+  dataset_name: "core50"      # pretraining and benchmark dataset (artifacts_root gets "_core50" appended)
+  core50_frame_step: 10       # keep 1 frame every N of each ~300-frame video (~6k seen-category pretraining images)
+
+wandb_group: "class_split_core50"

@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 from PIL import Image
 
@@ -24,9 +24,12 @@ class CORe50(VisionDataset):
         transform (callable, optional): A function/transform that takes in a PIL image and returns a transformed
             version, e.g. ``transforms.RandomCrop``.
         target_transform (callable, optional): A function/transform that takes in the target and transforms it.
+        classes (sequence of int, optional): Keep only these categories (indices into ``_CATEGORIES``) and relabel them
+            0..len(classes)-1 in the given order. ``None`` (default) keeps all 10 categories.
 
     Attributes:
-        classes (list): Category names, the target is the index into this list.
+        classes (list): Category names of the kept categories, the target is the index into this list.
+        class_to_idx (dict): Dict with items (category name, class index).
     """
 
     _URL = "http://bias.csr.unibo.it/maltoni/download/core50/core50_128x128.zip"
@@ -35,7 +38,7 @@ class CORe50(VisionDataset):
     _TRAIN_SESSIONS = (1, 2, 4, 5, 6, 8, 9, 11)
     _NUM_OBJECTS = 50
     _OBJECTS_PER_CATEGORY = 5
-    classes = [
+    _CATEGORIES = (
         "plug adapter",
         "mobile phone",
         "scissors",
@@ -46,7 +49,7 @@ class CORe50(VisionDataset):
         "marker",
         "cup",
         "remote control",
-    ]
+    )
 
     def __init__(
         self,
@@ -56,6 +59,7 @@ class CORe50(VisionDataset):
         download: bool = False,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
+        classes: Optional[Sequence[int]] = None,
     ) -> None:
         super().__init__(root, transform=transform, target_transform=target_transform)
 
@@ -74,14 +78,23 @@ class CORe50(VisionDataset):
                 f"extract it into {self.root}, so that {self._image_root}/s1/o1/C_01_01_000.png exists."
             )
 
+        # Category subset (seen/unseen class split): filter here rather than in a wrapper, because LightlyDataset and
+        # the online benchmark set .transform directly on this dataset (same as Imagenette)
+        categories = list(range(len(self._CATEGORIES))) if classes is None else [int(c) for c in classes]
+        old_to_new = {old: new for new, old in enumerate(categories)}
+        self.categories = categories
+        self.classes = [self._CATEGORIES[c] for c in categories]
+
         sessions = self._TRAIN_SESSIONS if self._split == "train" else self._TEST_SESSIONS
         self.sessions = list(sessions)
         self._samples = []
         for session in sessions:
             for obj in range(1, self._NUM_OBJECTS + 1):
+                category = (obj - 1) // self._OBJECTS_PER_CATEGORY
+                if category not in old_to_new:
+                    continue
                 frames = sorted((self._image_root / f"s{session}" / f"o{obj}").glob("*.png"))
-                label = (obj - 1) // self._OBJECTS_PER_CATEGORY
-                self._samples.extend((str(path), label) for path in frames[:: self._frame_step])
+                self._samples.extend((str(path), old_to_new[category]) for path in frames[:: self._frame_step])
 
         if not self._samples:
             raise RuntimeError(f"No images found in {self._image_root} for sessions {self.sessions}.")
@@ -107,4 +120,5 @@ class CORe50(VisionDataset):
         return len(self._samples)
 
     def extra_repr(self) -> str:
-        return f"Split: {self._split}, sessions: {self.sessions}, frame_step: {self._frame_step}"
+        return (f"Split: {self._split}, sessions: {self.sessions}, frame_step: {self._frame_step}, "
+                f"classes: {self.classes}")
