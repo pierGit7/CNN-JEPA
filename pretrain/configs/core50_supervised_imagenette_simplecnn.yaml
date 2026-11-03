@@ -1,0 +1,22 @@
+# Cross-dataset protocol: Supervised, pretrained on Imagenette, evaluated with the online linear / kNN benchmark on
+# CORe50 (10 object categories; sessions 3, 7, 10 = test, the other 8 = train), which the encoder never saw.
+#   val_metrics/lin_top1, knn_top1, ...              probe on CORe50 (CORe50 train -> CORe50 test): main metric
+#   val_metrics/imagenette_lin_top1, ...             same probe on Imagenette (train -> val), for reference
+# Everything else is inherited unchanged from supervised_imagenette_simplecnn.yaml.
+# CORe50 (128x128, ~5.9 GB zip) is downloaded to <data.root>/core50/core50_128x128 on the first run.
+# Run from the repo root:
+#   PYTHONPATH=. python pretrain/train_supervised.py --config-name core50_supervised_imagenette_simplecnn.yaml
+# (all 6 core50_* configs: ./run_core50.sh)
+
+defaults:
+  - supervised_imagenette_simplecnn
+  - _self_
+
+name: "Supervised_{data_dataset_name}_to_{data_eval_dataset_name}_{backbone_name}_lr{optimizer_lr}_bs{optimizer_batch_size}"
+artifacts_root: "artifacts/pretrain_lightly/core50_supervised"   # "_<dataset_name>" is appended automatically
+
+data:
+  eval_dataset_name: "core50" # dataset of the online benchmark (null = the pretraining dataset, as usual)
+  core50_frame_step: 10       # keep 1 frame every N of each ~300-frame video (~12k train / ~4.5k test images)
+
+wandb_group: "core50_transfer"

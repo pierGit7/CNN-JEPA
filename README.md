@@ -69,6 +69,20 @@ Download the datasets from the following links:
 - [ImageNet-100](https://www.kaggle.com/datasets/ambityga/imagenet100)
 - [ImageNet-1k](https://www.image-net.org/download.php)
 
+### Evaluating on a different dataset (Imagenette → CORe50)
+The online linear / kNN benchmark can run on a dataset different from the pretraining one. The pretraining dataset is
+set by `data.dataset_name`, the benchmark dataset by `data.eval_dataset_name` (`null` means the pretraining dataset, as before).
+When `data.eval_dataset_name` is set, `val_metrics/lin_top1`, `knn_top1`, ... are computed on the eval dataset, and the
+usual benchmark on the pretraining dataset is logged as `val_metrics/<dataset_name>_lin_top1`, ....
+
+[CORe50](https://vlomonaco.github.io/core50/) ([data/core50.py](data/core50.py)) is labelled by its 10 object categories
+and uses the standard split by session: sessions 3, 7 and 10 are the test set. The 128x128 version (~5.9 GB zip) is
+downloaded automatically to `<data.root>/core50/core50_128x128/` on the first run. `data.core50_frame_step` (default 10)
+keeps one frame every N of each video, because consecutive frames are near-duplicates.
+
+The configs `pretrain/configs/core50_{ijepacnn,ae,supervised}_imagenette_{simplecnn,simpleconvnext}.yaml` pretrain on
+Imagenette and evaluate on CORe50. `./run_core50.sh [hydra overrides]` runs all 6 of them.
+
 
 ## Copyright, acknowledgements
 Our implementation is based on:

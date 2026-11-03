@@ -29,6 +29,7 @@ from pretrain.online_classification_benchmark import OnlineLinearClassificationB
 import utils
 
 from data.imagenette import Imagenette
+from data.core50 import CORe50
 from data.hdf5_imagefolder import HDF5ImageFolder
 
 class LightlyModel(pl.LightningModule):
@@ -114,17 +115,18 @@ class LightlyModel(pl.LightningModule):
                 # if benchmark_results_dict is not None:
                 self.log_dict({f"val_metrics/{k}": v for k, v in benchmark_results_dict.items()})
 
-                # Class split: the benchmark above runs on the unseen classes, this one on the pretraining (seen) classes
-                if self.online_classifier_seen is not None:
+                # Reference benchmark, logged with a prefix: the pretraining (seen) classes for the class split, the
+                # pretraining dataset when the benchmark above runs on another dataset (data.eval_dataset_name)
+                if self.online_classifier_ref is not None:
                     try:
-                        seen_results_dict = self.online_classifier_seen.run_benchmarks(
+                        ref_results_dict = self.online_classifier_ref.run_benchmarks(
                             device=self.device,
                             dist_all_gather_fcn=self.all_gather,
                         )
                     except Exception as e:
-                        print(f"Failed to run seen-class benchmarks: {e}", flush=True)
-                        seen_results_dict = {"lin_top1": 0.0}
-                    self.log_dict({f"val_metrics/seen_{k}": v for k, v in seen_results_dict.items()})
+                        print(f"Failed to run {self.online_classifier_ref_prefix}benchmarks: {e}", flush=True)
+                        ref_results_dict = {"lin_top1": 0.0}
+                    self.log_dict({f"val_metrics/{self.online_classifier_ref_prefix}{k}": v for k, v in ref_results_dict.items()})
                 # https://github.com/Lightning-AI/pytorch-lightning/issues/19045
 
     def configure_optimizers(self):
@@ -184,22 +186,29 @@ class LightlyModel(pl.LightningModule):
         else:
             return optim
 
-    def setup(self, stage: str) -> None:
+    def get_dataset_spec(self, dataset_name):
+        """Returns (dataset_class, train_dataset_kwargs, val_dataset_kwargs, input_size, num_classes) for dataset_name.
+        Used both for the pretraining dataset (data.dataset_name) and the benchmark dataset (data.eval_dataset_name)."""
         dataset_classes = {
             "cifar10": torchvision.datasets.CIFAR10,
             "stl10": torchvision.datasets.STL10,
             "tiny-imagenet": torchvision.datasets.ImageFolder,
             "imagenette": Imagenette,
+            "core50": CORe50,
             "imagenet-100": HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
             "imagenet-1k":  HDF5ImageFolder, # Replaceable with torchvision.datasets.ImageFolder
         }
-        imagenette_root = self.cfg.data.get("root", "/data") + "/imagenette"
+        data_root = self.cfg.data.get("root", "/data")
+        imagenette_root = data_root + "/imagenette"
         imagenette_size = self.cfg.data.get("imagenette_size", "full")  # "full" | "320px" | "160px"
+        core50_root = data_root + "/core50"
+        core50_frame_step = self.cfg.data.get("core50_frame_step", 10)  # keep 1 video frame every N
         train_dataset_kwargs = {
             "cifar10": dict(root="/data/cifar10", download=True),
             "stl10": dict(root="/data/stl10", download=True, split='train+unlabeled'),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/train"),
             "imagenette": dict(root=imagenette_root, split='train', size=imagenette_size, download=True),
+            "core50": dict(root=core50_root, split='train', frame_step=core50_frame_step, download=True),
             "imagenet-100": dict(root="/data/imagenet-100-train.h5"),
             "imagenet-1k": dict(root="/data/imagenet-train.h5"),
         }
@@ -208,6 +217,7 @@ class LightlyModel(pl.LightningModule):
             "stl10": dict(root="/data/stl10", split='test'),
             "tiny-imagenet": dict(root="/data/tiny-imagenet-200/val"),
             "imagenette": dict(root=imagenette_root, split='val', size=imagenette_size),
+            "core50": dict(root=core50_root, split='test', frame_step=core50_frame_step),
             "imagenet-100": dict(root="/data/imagenet-100-val.h5"),
             "imagenet-1k": dict(root="/data/imagenet-val.h5"),
         }
@@ -216,6 +226,7 @@ class LightlyModel(pl.LightningModule):
             "stl10":  96,
             "tiny-imagenet": 64,
             "imagenette": 224,
+            "core50": 224,  # 128x128 images, upscaled like Imagenette by the benchmark transform
             "imagenet-100": 224,
             "imagenet-1k": 224,
         }
@@ -224,14 +235,26 @@ class LightlyModel(pl.LightningModule):
             "stl10":  10,
             "tiny-imagenet": 200,
             "imagenette": 10,
+            "core50": 10,  # object categories (CORe50 has 50 objects, 5 per category)
             "imagenet-100": 100,
             "imagenet-1k": 1000,
         }
-        self.dataset_class = dataset_classes[self.cfg.data.dataset_name]
-        self.train_dataset_kwargs = train_dataset_kwargs[self.cfg.data.dataset_name]
-        self.val_dataset_kwargs = val_dataset_kwargs[self.cfg.data.dataset_name]
-        self.input_size = input_sizes[self.cfg.data.dataset_name]
-        self.num_classes = num_classes[self.cfg.data.dataset_name]
+        return (
+            dataset_classes[dataset_name],
+            train_dataset_kwargs[dataset_name],
+            val_dataset_kwargs[dataset_name],
+            input_sizes[dataset_name],
+            num_classes[dataset_name],
+        )
+
+    def setup(self, stage: str) -> None:
+        (
+            self.dataset_class,
+            self.train_dataset_kwargs,
+            self.val_dataset_kwargs,
+            self.input_size,
+            self.num_classes,
+        ) = self.get_dataset_spec(self.cfg.data.dataset_name)
 
         # Optional seen/unseen class split: pretrain on the seen classes, run the online benchmark on the unseen ones
         class_split = self.cfg.data.get("class_split", None)
@@ -253,13 +276,18 @@ class LightlyModel(pl.LightningModule):
             transform=self.transform
         )
 
-        self.online_classifier_seen = None
-        if class_split is None:
-            lin_benchmark_train_kwargs = self.train_dataset_kwargs.copy()
-            if self.cfg.data.dataset_name == "stl10":
-                lin_benchmark_train_kwargs["split"] = "train"
-            self.online_classifier = self.make_online_classifier(lin_benchmark_train_kwargs, self.val_dataset_kwargs, self.num_classes)
-        else:
+        # Optional benchmark dataset different from the pretraining one (e.g. pretrain on imagenette, evaluate on core50)
+        eval_dataset_name = self.cfg.data.get("eval_dataset_name", None)
+        if eval_dataset_name is not None and class_split is not None:
+            raise NotImplementedError("data.class_split and data.eval_dataset_name can't be used together")
+
+        lin_benchmark_train_kwargs = self.train_dataset_kwargs.copy()
+        if self.cfg.data.dataset_name == "stl10":
+            lin_benchmark_train_kwargs["split"] = "train"
+
+        self.online_classifier_ref = None
+        self.online_classifier_ref_prefix = ""
+        if class_split is not None:
             # Both benchmarks load their own data, since their classes differ from (unseen) or are a copy of (seen)
             # the pretraining data. The batch size matches the trainer's loaders, i.e. the probe of the 10-class runs.
             self.online_classifier = self.make_online_classifier(
@@ -268,9 +296,27 @@ class LightlyModel(pl.LightningModule):
                 len(unseen_classes),
                 own_dataloaders=True,
             )
-            self.online_classifier_seen = self.make_online_classifier(
+            self.online_classifier_ref = self.make_online_classifier(
                 self.train_dataset_kwargs, self.val_dataset_kwargs, len(seen_classes), own_dataloaders=True,
             )
+            self.online_classifier_ref_prefix = "seen_"
+        elif eval_dataset_name is not None:
+            # Main benchmark (val_metrics/lin_top1, ...) on the eval dataset (its own train -> val/test split), and the
+            # usual benchmark on the pretraining dataset for reference (val_metrics/<dataset_name>_lin_top1, ...)
+            eval_class, eval_train_kwargs, eval_val_kwargs, _, eval_num_classes = self.get_dataset_spec(eval_dataset_name)
+            # Instantiate once here, so a missing dataset (or its download) fails at startup, not after the first epoch
+            eval_sizes = [len(eval_class(**kwargs)) for kwargs in (eval_train_kwargs, eval_val_kwargs)]
+            print(f"Pretraining on {self.cfg.data.dataset_name}, online benchmark on {eval_dataset_name} "
+                  f"(train: {eval_sizes[0]}, val: {eval_sizes[1]} images)", flush=True)
+            self.online_classifier = self.make_online_classifier(
+                eval_train_kwargs, eval_val_kwargs, eval_num_classes, own_dataloaders=True, dataset_class=eval_class,
+            )
+            self.online_classifier_ref = self.make_online_classifier(
+                lin_benchmark_train_kwargs, self.val_dataset_kwargs, self.num_classes, own_dataloaders=True,
+            )
+            self.online_classifier_ref_prefix = f"{self.cfg.data.dataset_name}_"
+        else:
+            self.online_classifier = self.make_online_classifier(lin_benchmark_train_kwargs, self.val_dataset_kwargs, self.num_classes)
 
     def make_class_split(self, seed, num_seen):
         """Randomly split the dataset's classes into num_seen seen classes and the remaining unseen classes.
@@ -294,11 +340,12 @@ class LightlyModel(pl.LightningModule):
             })
         return seen_classes, unseen_classes
 
-    def make_online_classifier(self, train_dataset_kwargs, val_dataset_kwargs, num_classes, own_dataloaders=False):
+    def make_online_classifier(self, train_dataset_kwargs, val_dataset_kwargs, num_classes, own_dataloaders=False,
+                               dataset_class=None):
         return OnlineLinearClassificationBenckmark(
             backbone=self.backbone_for_online_eval,
             num_classes=num_classes, 
-            dataset_class=self.dataset_class,
+            dataset_class=dataset_class or self.dataset_class,
             train_dataset_kwargs = train_dataset_kwargs, 
             val_dataset_kwargs=val_dataset_kwargs, 
             input_size=self.input_size,
