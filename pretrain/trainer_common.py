@@ -113,6 +113,18 @@ class LightlyModel(pl.LightningModule):
 
                 # if benchmark_results_dict is not None:
                 self.log_dict({f"val_metrics/{k}": v for k, v in benchmark_results_dict.items()})
+
+                # Class split: the benchmark above runs on the unseen classes, this one on the pretraining (seen) classes
+                if self.online_classifier_seen is not None:
+                    try:
+                        seen_results_dict = self.online_classifier_seen.run_benchmarks(
+                            device=self.device,
+                            dist_all_gather_fcn=self.all_gather,
+                        )
+                    except Exception as e:
+                        print(f"Failed to run seen-class benchmarks: {e}", flush=True)
+                        seen_results_dict = {"lin_top1": 0.0}
+                    self.log_dict({f"val_metrics/seen_{k}": v for k, v in seen_results_dict.items()})
                 # https://github.com/Lightning-AI/pytorch-lightning/issues/19045
 
     def configure_optimizers(self):
@@ -221,6 +233,14 @@ class LightlyModel(pl.LightningModule):
         self.input_size = input_sizes[self.cfg.data.dataset_name]
         self.num_classes = num_classes[self.cfg.data.dataset_name]
 
+        # Optional seen/unseen class split: pretrain on the seen classes, run the online benchmark on the unseen ones
+        class_split = self.cfg.data.get("class_split", None)
+        if class_split is not None:
+            seen_classes, unseen_classes = self.make_class_split(class_split.seed, class_split.num_seen)
+            self.train_dataset_kwargs = dict(self.train_dataset_kwargs, classes=seen_classes)
+            self.val_dataset_kwargs = dict(self.val_dataset_kwargs, classes=seen_classes)
+            self.num_classes = len(seen_classes)
+
         # Setup self.transform
         self.setup_transform()
 
@@ -233,19 +253,60 @@ class LightlyModel(pl.LightningModule):
             transform=self.transform
         )
 
-        lin_benchmark_train_kwargs = self.train_dataset_kwargs.copy()
-        if self.cfg.data.dataset_name == "stl10":
-            lin_benchmark_train_kwargs["split"] = "train"
-        self.online_classifier = OnlineLinearClassificationBenckmark(
+        self.online_classifier_seen = None
+        if class_split is None:
+            lin_benchmark_train_kwargs = self.train_dataset_kwargs.copy()
+            if self.cfg.data.dataset_name == "stl10":
+                lin_benchmark_train_kwargs["split"] = "train"
+            self.online_classifier = self.make_online_classifier(lin_benchmark_train_kwargs, self.val_dataset_kwargs, self.num_classes)
+        else:
+            # Both benchmarks load their own data, since their classes differ from (unseen) or are a copy of (seen)
+            # the pretraining data. The batch size matches the trainer's loaders, i.e. the probe of the 10-class runs.
+            self.online_classifier = self.make_online_classifier(
+                dict(self.train_dataset_kwargs, classes=unseen_classes),
+                dict(self.val_dataset_kwargs, classes=unseen_classes),
+                len(unseen_classes),
+                own_dataloaders=True,
+            )
+            self.online_classifier_seen = self.make_online_classifier(
+                self.train_dataset_kwargs, self.val_dataset_kwargs, len(seen_classes), own_dataloaders=True,
+            )
+
+    def make_class_split(self, seed, num_seen):
+        """Randomly split the dataset's classes into num_seen seen classes and the remaining unseen classes.
+        The split only depends on seed (not on cfg.seed), and is stored in cfg for logging."""
+        if self.cfg.data.dataset_name != "imagenette":
+            raise NotImplementedError("data.class_split is only implemented for imagenette")
+        perm = torch.randperm(self.num_classes, generator=torch.Generator().manual_seed(seed)).tolist()
+        seen_classes, unseen_classes = sorted(perm[:num_seen]), sorted(perm[num_seen:])
+
+        wnids = sorted(Imagenette._WNID_TO_CLASS)  # class index = position in the sorted wnids
+        describe = lambda classes: [f"{c}:{wnids[c]}:{Imagenette._WNID_TO_CLASS[wnids[c]][0]}" for c in classes]
+        print("Class split seed", seed, "| seen:", describe(seen_classes), "| unseen:", describe(unseen_classes), flush=True)
+        OmegaConf.set_struct(self.cfg, False)
+        self.cfg.data.class_split.seen_classes = describe(seen_classes)
+        self.cfg.data.class_split.unseen_classes = describe(unseen_classes)
+        # The hparams were logged from a copy of cfg made in __init__, so log the split separately
+        if self._trainer is not None and self.logger is not None:
+            self.logger.log_hyperparams({
+                "class_split_seen_classes": describe(seen_classes),
+                "class_split_unseen_classes": describe(unseen_classes),
+            })
+        return seen_classes, unseen_classes
+
+    def make_online_classifier(self, train_dataset_kwargs, val_dataset_kwargs, num_classes, own_dataloaders=False):
+        return OnlineLinearClassificationBenckmark(
             backbone=self.backbone_for_online_eval,
-            num_classes=self.num_classes, 
+            num_classes=num_classes, 
             dataset_class=self.dataset_class,
-            train_dataset_kwargs = lin_benchmark_train_kwargs, 
-            val_dataset_kwargs=self.val_dataset_kwargs, 
+            train_dataset_kwargs = train_dataset_kwargs, 
+            val_dataset_kwargs=val_dataset_kwargs, 
             input_size=self.input_size,
+            batch_size=self.cfg.optimizer.batch_size,
             num_workers=self.cfg.data.num_workers,
             dist_world_size=self.trainer.world_size if self._trainer is not None else 1,
             dist_rank=self.trainer.global_rank if self._trainer is not None else 0,
+            own_dataloaders=own_dataloaders,
         ) # WARNING: At this point device is CPU!!!
 
     def train_dataloader(self):

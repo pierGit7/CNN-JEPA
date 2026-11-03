@@ -33,7 +33,14 @@ class OnlineLinearClassificationBenckmark:
         topk=(1,5),
         dist_world_size=1,
         dist_rank=0,
+        own_dataloaders=False,
     ):
+        """
+        Args:
+            own_dataloaders: if True, run_benchmarks builds its own train/val dataloaders from dataset_class and
+                train/val_dataset_kwargs instead of reusing the trainer's. Needed when the benchmark classes differ
+                from the pretraining classes (seen/unseen class split).
+        """
         self.backbone = backbone
         self.num_features = backbone.num_features
         self.num_classes = num_classes
@@ -42,6 +49,10 @@ class OnlineLinearClassificationBenckmark:
         self.topk = topk
         self.dist_world_size = dist_world_size
         self.dist_rank = dist_rank
+        self.own_dataloaders = own_dataloaders
+        self.dataset_class = dataset_class
+        self.train_dataset_kwargs = train_dataset_kwargs
+        self.val_dataset_kwargs = val_dataset_kwargs
 
         # Dataset & Dataloader setup
         self.transform = transforms.Compose(
@@ -56,12 +67,28 @@ class OnlineLinearClassificationBenckmark:
             ]
         )
 
+    def make_dataloader(self, dataset_kwargs, train):
+        # Same as the trainer's loaders: the train loader is shuffled with drop_last, because the linear probe is fit
+        # batch by batch on the features in this order (unshuffled, each batch would hold a single class).
+        dataset = self.dataset_class(**dataset_kwargs, transform=self.transform)
+        sampler = None
+        if self.dist_world_size > 1:
+            sampler = DistributedSampler(dataset, num_replicas=self.dist_world_size, rank=self.dist_rank, shuffle=train)
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=train and sampler is None,
+            drop_last=train,
+            sampler=sampler,
+            num_workers=self.num_workers,
+        )
+
     def run_benchmarks(self,
                        device,
                        dist_all_gather_fcn,
-                       train_dataloader,
-                       val_dataloader,
-                       train_val_transform,
+                       train_dataloader=None,
+                       val_dataloader=None,
+                       train_val_transform=None,
                        num_epochs=90, ):
         """ Runs the online linear classification benchmark.
 
@@ -71,6 +98,13 @@ class OnlineLinearClassificationBenckmark:
         Returns:
             dict: benchmark results
         """
+        if self.own_dataloaders:
+            train_features, train_targets = self.compute_features(self.make_dataloader(self.train_dataset_kwargs, train=True), device)
+            val_features, val_targets = self.compute_features(self.make_dataloader(self.val_dataset_kwargs, train=False), device)
+            return self.fit_and_evaluate(
+                train_features, train_targets, val_features, val_targets, device, dist_all_gather_fcn, num_epochs
+            )
+
         # train_dataloader.dataset is expected to be pytorch_lightning.trainer.supporters.CombinedDataset
         # train_dataloader.dataset.datasets is expected to be a LightlyDataset
         # We replace the dataset's transform with the one we want to use for the benchmark
@@ -86,6 +120,14 @@ class OnlineLinearClassificationBenckmark:
         train_features, train_targets = self.compute_features(train_dataloader, device)
         val_features, val_targets = self.compute_features(val_dataloader, device)
 
+        results_dict = self.fit_and_evaluate(
+            train_features, train_targets, val_features, val_targets, device, dist_all_gather_fcn, num_epochs
+        )
+        train_dataloader.dataset.datasets.transform = train_val_transform
+        val_dataloader.dataset.transform = train_val_transform
+        return results_dict
+
+    def fit_and_evaluate(self, train_features, train_targets, val_features, val_targets, device, dist_all_gather_fcn, num_epochs):
         train_features = dist_all_gather_fcn(train_features)
         train_targets = dist_all_gather_fcn(train_targets)
         val_features = dist_all_gather_fcn(val_features)
@@ -136,8 +178,6 @@ class OnlineLinearClassificationBenckmark:
 
         # cleanup
         del train_features, train_targets, val_features, val_targets
-        train_dataloader.dataset.datasets.transform = train_val_transform
-        val_dataloader.dataset.transform = train_val_transform
         return results_dict
     
     @torch.no_grad()

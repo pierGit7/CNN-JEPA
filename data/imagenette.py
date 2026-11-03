@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 from PIL import Image
 
@@ -26,6 +26,8 @@ class Imagenette(VisionDataset):
         transform (callable, optional): A function/transform that takes in a PIL image and returns a transformed
             version, e.g. ``transforms.RandomCrop``.
         target_transform (callable, optional): A function/transform that takes in the target and transforms it.
+        classes (sequence of int, optional): Keep only these classes (indices into the sorted WordNet IDs) and relabel
+            them 0..len(classes)-1 in the given order. ``None`` (default) keeps all 10 classes.
 
      Attributes:
         classes (list): List of the class name tuples.
@@ -60,6 +62,7 @@ class Imagenette(VisionDataset):
         download=False,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
+        classes: Optional[Sequence[int]] = None,
     ) -> None:
         super().__init__(root, transform=transform, target_transform=target_transform)
 
@@ -82,6 +85,19 @@ class Imagenette(VisionDataset):
             class_name: idx for wnid, idx in self.wnid_to_idx.items() for class_name in self._WNID_TO_CLASS[wnid]
         }
         self._samples = make_dataset(self._image_root, self.wnid_to_idx, extensions=".jpeg")
+
+        if classes is not None:
+            # Class subset (seen/unseen split): filter here rather than in a wrapper, because LightlyDataset and the
+            # online benchmark set .transform directly on this dataset.
+            classes = [int(c) for c in classes]
+            old_to_new = {old: new for new, old in enumerate(classes)}
+            self._samples = [(path, old_to_new[label]) for path, label in self._samples if label in old_to_new]
+            self.wnids = [self.wnids[c] for c in classes]
+            self.wnid_to_idx = {wnid: idx for idx, wnid in enumerate(self.wnids)}
+            self.classes = [self._WNID_TO_CLASS[wnid] for wnid in self.wnids]
+            self.class_to_idx = {
+                class_name: idx for wnid, idx in self.wnid_to_idx.items() for class_name in self._WNID_TO_CLASS[wnid]
+            }
 
     def _check_exists(self) -> bool:
         return self._size_root.exists()

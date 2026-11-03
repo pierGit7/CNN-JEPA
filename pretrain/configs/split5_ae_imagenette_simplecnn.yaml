@@ -1,0 +1,22 @@
+# Class-split protocol: Autoencoder (SparK-style), pretrained on 5 randomly chosen Imagenette classes ("seen"), evaluated with the
+# online linear / kNN benchmark on the other 5 classes ("unseen"), which the encoder never saw during pretraining.
+#   val_metrics/lin_top1, knn_top1, ...   probe on the unseen classes (unseen train -> unseen val): main metric
+#   val_metrics/seen_lin_top1, ...        same probe on the seen classes (seen train -> seen val), for reference
+# Everything else is inherited unchanged from ae_imagenette_simplecnn.yaml.
+# Run from the repo root:
+#   PYTHONPATH=. python pretrain/train_autoencoder.py --config-name split5_ae_imagenette_simplecnn.yaml
+# Other splits (folds): ... data.class_split.seed=1   (all 6 split5_* configs: ./run_class_split.sh)
+
+defaults:
+  - ae_imagenette_simplecnn
+  - _self_
+
+name: "AE_{data_dataset_name}_{backbone_name}_mask{mask_ratio}_lr{optimizer_lr}_bs{optimizer_batch_size}_split{data_class_split_seed}"
+artifacts_root: "artifacts/pretrain_lightly/split5_autoencoder"   # "_<dataset_name>" is appended automatically
+
+data:
+  class_split:
+    seed: 0                   # which random 5/5 split of the 10 classes (independent of the training seed)
+    num_seen: 5               # classes used for pretraining; the rest are only used by the benchmark
+
+wandb_group: "class_split"
