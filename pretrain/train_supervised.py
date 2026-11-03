@@ -14,7 +14,13 @@ from lightly.transforms.utils import IMAGENET_NORMALIZE
 from lightly.utils.benchmarking import knn_predict
 from lightly.utils.benchmarking.topk import mean_topk_accuracy
 
+from lightly.data import LightlyDataset
+
 from pretrain.trainer_common import LightlyModel, main_pretrain
+
+# import models.X registers the backbones in the timm model registry
+import models.custom  # simple_cnn
+import models.simple_convnext  # convnext_simple
 
 class Supervised(LightlyModel):
     def __init__(self, cfg: DictConfig):
@@ -41,6 +47,33 @@ class Supervised(LightlyModel):
     def setup(self, stage: str) -> None:
         super().setup(stage)
         self.classifier = nn.Linear(self.backbone.num_features, self.num_classes)
+        # Deterministic val images (resize + center crop) so val_metrics/supervised_acc is not measured on random crops.
+        # The online linear/kNN benchmark still uses self.transform, so its numbers stay comparable to the SSL runs.
+        val_transform = transforms.Compose(
+            [
+                transforms.Resize(int(self.input_size / 0.875)),
+                transforms.CenterCrop(self.input_size),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=IMAGENET_NORMALIZE["mean"],
+                    std=IMAGENET_NORMALIZE["std"],
+                ),
+            ]
+        )
+        self.val_dataset = LightlyDataset.from_torch_dataset(
+            self.dataset_class(**self.val_dataset_kwargs),
+            transform=val_transform
+        )
+
+    def on_validation_epoch_end(self) -> None:
+        # The online benchmark expects the val dataset to use self.transform (it asserts this), so swap the
+        # deterministic val transform out while it runs.
+        val_transform = self.val_dataset.transform
+        self.val_dataset.transform = self.transform
+        try:
+            super().on_validation_epoch_end()
+        finally:
+            self.val_dataset.transform = val_transform
 
     def forward(self, x):
         y = self.backbone(x).flatten(start_dim=1)

@@ -1,0 +1,59 @@
+# Supervised baseline for CNN-JEPA: a small 3-stage ConvNeXt (convnext_simple) + one linear (FC) layer, trained with
+# cross-entropy on the Imagenette labels, on one GPU (e.g. a university HPC node).
+# Identical to supervised_imagenette_simplecnn.yaml except for the backbone section.
+# Run from the repo root:
+#   PYTHONPATH=. python pretrain/train_supervised.py --config-name supervised_imagenette_simpleconvnext.yaml
+# Any value can be overridden on the command line, e.g.
+#   ... data.root=/path/to/datasets trainer.max_epochs=2 optimizer.lr=0.001
+# Data, backbone, optimizer and trainer settings match ijepacnn_imagenette_simpleconvnext.yaml for a fair comparison.
+
+seed: 42
+
+name: "Supervised_{data_dataset_name}_{backbone_name}_lr{optimizer_lr}_bs{optimizer_batch_size}"
+artifacts_root: "artifacts/pretrain_lightly/supervised"   # "_<dataset_name>" is appended automatically
+
+# ---------------------------------------------------------------- input
+data:
+  dataset_name: "imagenette"  # image size (224) and class count (10) come from trainer_common.py
+  root: "./datasets"          # images are read from <root>/imagenette/imagenette2-160/{train,val}; on the HPC pass data.root=/your/path
+  imagenette_size: "160px"    # which Imagenette download you have: "160px" | "320px" | "full"
+  num_workers: 8              # parallel image-loading processes (match the CPUs you request from SLURM)
+
+# ---------------------------------------------------------------- encoder (+ the FC head added in train_supervised.py)
+backbone:
+  name: "convnext_simple"     # registered in models/simple_convnext.py
+  pretrained_weights: null
+  kwargs:
+    global_pool: 'avg'        # average-pool the feature map to a (B, 128) vector for the FC layer
+    dims: [32, 64, 128]       # channels per stage (same as simple_cnn)
+    depths: [1, 1, 1]         # ConvNeXt blocks per stage
+    kernel_size: 7            # depthwise conv kernel inside each block
+    sparse: False             # no masking in supervised training: the masking-aware layers must act as normal layers
+
+# ---------------------------------------------------------------- optimisation
+optimizer:
+  batch_size: 128
+  lr: 0.01                    # same as the SSL runs; try 0.001 if training is unstable
+  weight_decay: 0.01
+  cosine_warmpup_sched: True  # (sic) linear warmup then cosine decay
+  lr_warmup_epochs: 10
+  exclude_norm_and_bias_from_wd: False
+  wd_schedule: False
+
+trainer:
+  max_epochs: 100
+  devices: 1
+  accelerator: "gpu"
+  precision: "bf16"           # needs an Ampere+ GPU (A100, A40, RTX 30xx/40xx...). On V100/older use 16
+  accumulate_grad_batches: null
+  overfit_batches: 0.0
+
+# ---------------------------------------------------------------- logging
+wandb_group: "supervised"
+wandb: true                   # set to false to disable W&B logging (metrics are then only printed)
+
+# disable hydra outputs
+hydra:
+  output_subdir: null
+  run:
+    dir: .

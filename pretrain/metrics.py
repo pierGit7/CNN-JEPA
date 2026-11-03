@@ -80,7 +80,7 @@ def contrastive_acc_eval(backbone: nn.Module, dataset, batch_size: int = 64, inp
 def log_example_inputs(views, log_label="train", num_examples=8):
     batch_size = views[0].shape[0]
     num_examples = min(num_examples, batch_size)
-    selected_views = [view[:num_examples].cpu().numpy() for view in views]
+    selected_views = [view[:num_examples].detach().float().cpu().numpy() for view in views]  # numpy has no bfloat16
     max_size = np.max([view.shape[-1] for view in selected_views], axis=0)
     selected_views = [
         np.pad(view, ((0, 0), (0, 0), (0, max_size - view.shape[2]), (0, 0)))
